@@ -1,0 +1,6 @@
+name: bilinc
+version: 1.0.0
+description: "Bilinc memory provider: hosted, versioned long-term memory with recall, remember, revise and forget, plus an audit history."
+requires_hermes: ">=0.21.6"
+requires_env:
+  - BILINC_API_KEY

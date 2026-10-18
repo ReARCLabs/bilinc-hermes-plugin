@@ -1,0 +1,32 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          path: hermes-agent
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Hermes
+        run: |
+          uv venv --python 3.14 .venv
+          VIRTUAL_ENV=.venv uv pip install -e ./hermes-agent pytest
+      - name: Unit tests
+        run: HERMES_AGENT_PATH=$GITHUB_WORKSPACE/hermes-agent .venv/bin/python -m pytest -q plugin/tests
+      - name: hermes plugins validate
+        run: |
+          export HERMES_HOME=$(mktemp -d)
+          .venv/bin/hermes plugins validate ./plugin --install-deps

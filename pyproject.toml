@@ -1,0 +1,8 @@
+[project]
+name = "bilinc-hermes"
+version = "1.0.0"
+description = "Hermes Agent memory provider plugin: Bilinc"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# No runtime dependencies: the plugin talks to Bilinc Cloud with the standard library only.
+dependencies = []
