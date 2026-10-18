@@ -299,6 +299,11 @@ def _format_prefetch(items: list[dict[str, Any]]) -> str:
     return "[Bilinc memory — recalled for this turn; may be outdated, verify before relying on it]\n" + "\n".join(lines)
 
 
+def _entry_version(result: dict[str, Any]) -> Optional[str]:
+    """Write responses name it ``entryVersion``; recall items name it ``entry_version``."""
+    return result.get("entryVersion") or result.get("entry_version")
+
+
 def _tool_result(item: dict[str, Any]) -> dict[str, Any]:
     keep = ("key", "value", "memory_type", "importance", "score", "version", "entry_version", "source", "updated_at")
     return {k: item[k] for k in keep if k in item}
@@ -579,14 +584,14 @@ class BilincMemoryProvider(MemoryProvider):
         result = self._client.commit(key, content, memory_type=memory_type, canonical=True, priority=0.6,
                                      session_id=self._session_id, metadata={"kind": "note", "plugin": "bilinc-hermes"},
                                      if_absent=True, idempotency_key=_request_id("hermes-note"))
-        return {"stored": bool(result.get("success", True)), "key": key, "version": result.get("entry_version")}
+        return {"stored": bool(result.get("success", True)), "key": key, "version": _entry_version(result)}
 
     def _tool_revise(self, args: dict[str, Any]) -> dict[str, Any]:
         key = self._required(args, "key")
         content = _clip(self._required(args, "content"))
         result = self._client.revise(key, content, reason=_clip(args.get("reason") or "", 512),
                                      idempotency_key=_request_id("hermes-revise"))
-        return {"revised": bool(result.get("success", True)), "key": key, "version": result.get("entry_version")}
+        return {"revised": bool(result.get("success", True)), "key": key, "version": _entry_version(result)}
 
     def _tool_forget(self, args: dict[str, Any]) -> dict[str, Any]:
         key = self._required(args, "key")

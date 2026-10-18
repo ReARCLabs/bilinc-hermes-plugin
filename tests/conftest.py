@@ -51,7 +51,7 @@ class FakeTransport:
         queued = self.responses.get(path)
         if queued:
             return queued.pop(0)
-        return 200, {"success": True, "entry_version": "v1"}
+        return 200, {"success": True, "entryVersion": "v1_test"}
 
     def paths(self) -> list[str]:
         return [call["path"] for call in self.calls]

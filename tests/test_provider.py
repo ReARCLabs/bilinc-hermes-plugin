@@ -39,7 +39,7 @@ def test_remember_is_create_only_redacted_and_idempotent(make_provider, transpor
     raw = provider.handle_tool_call("bilinc_remember", {"content": "deploy token: abc123 and key sk-" + "x" * 24,
                                                         "key": "pref:deploy"})
     result = json.loads(raw)
-    assert result["stored"] is True and result["key"] == "pref:deploy"
+    assert result["stored"] is True and result["key"] == "pref:deploy" and result["version"] == "v1_test"
     call = transport.calls[-1]
     assert call["path"] == "/api/cloud/memory/commit"
     assert call["body"]["ifAbsent"] is True
