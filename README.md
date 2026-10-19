@@ -1,11 +1,33 @@
 # Bilinc memory provider for Hermes
 
+![Bilinc: every memory change, versioned](docs/banner.jpg)
+
 Connects [Hermes Agent](https://github.com/NousResearch/hermes-agent) to [Bilinc](https://bilinc.space), hosted long-term memory for AI agents. Every change to a memory is versioned, so you can see what Hermes remembered, when it changed and why.
+
+## Quick start
+
+1. Get an API key at https://bilinc.space (free plan, no card required).
+2. Install the plugin and paste the key:
+
+   ```bash
+   hermes plugins install bilinc
+   hermes memory setup bilinc
+   ```
+
+3. Start a new session. Hermes now recalls relevant memories before each turn.
+
+## What you get
 
 - **Recall before each turn:** memories relevant to your message are added to the turn's context.
 - **Explicit tools:** `bilinc_recall`, `bilinc_remember`, `bilinc_revise`, `bilinc_forget`.
 - **Built-in memory mirroring:** facts saved with Hermes' own memory tool are copied to Bilinc, and updated or removed with it.
 - **Optional turn capture:** off by default; when on, each finished turn is stored as a short-lived session record.
+
+## How it looks
+
+A revise keeps the previous version, a forget removes the memory from recall, and the reason given for each change is kept in the memory's history. In the Bilinc dashboard, open any memory to see that history: what it said before, what it says now, when it changed and why.
+
+![History of one memory in the Bilinc dashboard (demo workspace)](docs/screenshots/memory-history.png)
 
 ## Requirements
 
