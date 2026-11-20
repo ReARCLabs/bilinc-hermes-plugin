@@ -2,11 +2,11 @@
 
 ![Bilinc: every memory change, versioned](docs/banner.jpg)
 
-Connects [Hermes Agent](https://github.com/NousResearch/hermes-agent) to [Bilinc](https://bilinc.space), hosted long-term memory for AI agents. Every change to a memory is versioned, so you can see what Hermes remembered, when it changed and why.
+Connects [Hermes Agent](https://github.com/NousResearch/hermes-agent) to [Bilinc](https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc-hermes-plugin), hosted long-term memory for AI agents. Every change to a memory is versioned, so you can see what Hermes remembered, when it changed and why.
 
 ## Quick start
 
-1. Get an API key at https://bilinc.space (free plan, no card required).
+1. Get an API key at https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc-hermes-plugin (free plan, no card required).
 2. Install the plugin and paste the key:
 
    ```bash
@@ -32,7 +32,7 @@ A revise keeps the previous version, a forget removes the memory from recall, an
 ## Requirements
 
 - Hermes Agent 0.21.6 or newer
-- A Bilinc account and API key from https://bilinc.space (free plan available, no card required)
+- A Bilinc account and API key from https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc-hermes-plugin (free plan available, no card required)
 
 The plugin has no Python dependencies.
 
