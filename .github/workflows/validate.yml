@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: NousResearch/hermes-agent
+          # Pinned to a release: hermes-agent main does not install on 2026-11-21 (pillow pin conflict).
+          ref: v0.23.3
           path: hermes-agent
       - uses: astral-sh/setup-uv@v6
       - name: Install Hermes
