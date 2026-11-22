@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
@@ -48,10 +49,21 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
 _BOOL_WORDS = {**dict.fromkeys(("true", "1", "yes", "on"), True), **dict.fromkeys(("false", "0", "no", "off"), False)}
 
 _MAX_VALUE_CHARS = 6000
-_MAX_PREFETCH_LINE = 320
+_MAX_PREFETCH_ITEM = 700  # chars per injected memory, cut around the part that matches the message
+_MAX_PREFETCH_TOTAL = 4000  # chars for the whole injected block
+_MAX_TOOL_ITEM = 1500  # chars per bilinc_recall result value
+_MAX_TOOL_QUERIES = 5
 _MAX_KEY_CHARS = 512
 _READ_ATTEMPTS = 2
-_PREFETCH_TIMEOUT = 2.0
+# First-turn recall waits up to this long. Hermes allows each external provider 8 s
+# (agent/memory_manager.py _EXTERNAL_PREFETCH_TIMEOUT_S); 2 s was shorter than a typical recall.
+_PREFETCH_TIMEOUT = 6.0
+_PREFETCH_PROFILE = "balanced"
+_RECALL_GUIDANCE = (
+    "When Bilinc finds memories related to a message, they are attached to it in a memory-context block. "
+    "If a request depends on earlier conversations (people, preferences, past decisions, exact names, numbers "
+    "or dates) and what is attached does not cover it, call bilinc_recall before acting."
+)
 _WRITE_TIMEOUT = 10.0
 _RECALL_BACKOFF_SECONDS = 60.0
 # Errors that will not go away by retrying: a bad key or an exhausted / inactive plan.
@@ -283,20 +295,62 @@ def _value_text(value: Any) -> str:
         return str(value)
 
 
-def _compact(text: str, limit: int = _MAX_PREFETCH_LINE) -> str:
+_STOPWORDS = frozenset(
+    "the and for with that this from have what when where which will would could should about into your "
+    "you are was were been also them they their there then than just like make made need want please".split()
+)
+
+
+def _memory_text(value: Any) -> str:
+    """Readable text for a stored value; captured turns ({user, assistant}) read as a short dialogue."""
+    if isinstance(value, dict) and ("user" in value or "assistant" in value):
+        parts = []
+        if value.get("user"):
+            parts.append(f"User: {value['user']}")
+        if value.get("assistant"):
+            parts.append(f"Assistant: {value['assistant']}")
+        return "\n".join(parts)
+    return _value_text(value)
+
+
+def _query_terms(query: str) -> list[str]:
+    words = re.findall(r"[0-9A-Za-zÀ-ÿ][0-9A-Za-zÀ-ÿ'._-]{2,}", (query or "").lower())
+    return [w for w in dict.fromkeys(words) if w not in _STOPWORDS]
+
+
+def _excerpt(text: str, query: str, limit: int) -> str:
+    """Up to ``limit`` chars of ``text``, centred on the window with the most query-term hits (start if none)."""
     flat = re.sub(r"\s+", " ", text or "").strip()
-    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+    if len(flat) <= limit:
+        return flat
+    lower = flat.lower()
+    hits = sorted(m.start() for term in _query_terms(query) for m in re.finditer(re.escape(term), lower))
+    start = 0
+    if hits:
+        best = -1
+        for pos in hits:
+            candidate = max(0, min(pos - limit // 4, len(flat) - limit))
+            score = sum(1 for h in hits if candidate <= h < candidate + limit)
+            if score > best:
+                best, start = score, candidate
+    piece = flat[start:start + limit].strip()
+    return ("…" if start > 0 else "") + piece + ("…" if start + limit < len(flat) else "")
 
 
-def _format_prefetch(items: list[dict[str, Any]]) -> str:
-    lines = []
+def _format_prefetch(items: list[dict[str, Any]], query: str = "") -> str:
+    lines, used = [], 0
     for item in items:
-        value = _compact(_value_text(item.get("value", item.get("content", ""))))
-        if value:
-            lines.append(f"- {item.get('key', 'memory')}: {value}")
+        value = _excerpt(_memory_text(item.get("value", item.get("content", ""))), query, _MAX_PREFETCH_ITEM)
+        if not value:
+            continue
+        line = f"- {item.get('key', 'memory')}: {value}"
+        if lines and used + len(line) > _MAX_PREFETCH_TOTAL:
+            break
+        lines.append(line)
+        used += len(line)
     if not lines:
         return ""
-    return "[Bilinc memory — recalled for this turn; may be outdated, verify before relying on it]\n" + "\n".join(lines)
+    return "[Bilinc memory — recalled for this message; may be outdated, verify before relying on it]\n" + "\n".join(lines)
 
 
 def _entry_version(result: dict[str, Any]) -> Optional[str]:
@@ -304,9 +358,17 @@ def _entry_version(result: dict[str, Any]) -> Optional[str]:
     return result.get("entryVersion") or result.get("entry_version")
 
 
-def _tool_result(item: dict[str, Any]) -> dict[str, Any]:
-    keep = ("key", "value", "memory_type", "importance", "score", "version", "entry_version", "source", "updated_at")
-    return {k: item[k] for k in keep if k in item}
+def _tool_result(item: dict[str, Any], query: str = "") -> dict[str, Any]:
+    keep = ("key", "value", "memory_type", "version", "entry_version", "source", "updated_at")
+    result = {k: item[k] for k in keep if k in item}
+    if "value" in result:
+        text = _memory_text(result["value"])
+        if len(text) > _MAX_TOOL_ITEM:
+            result["value"] = _excerpt(text, query, _MAX_TOOL_ITEM)
+            result["truncated"] = True
+        elif isinstance(result["value"], dict) and ("user" in result["value"] or "assistant" in result["value"]):
+            result["value"] = text
+    return result
 
 
 def _schema(name: str, description: str, properties: dict[str, Any], required: tuple[str, ...]) -> dict[str, Any]:
@@ -316,10 +378,15 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: t
 
 _TOOL_SCHEMAS = (
     _schema("bilinc_recall",
-            "Search long-term memory in Bilinc. Returns matching memories with their keys, so they can be revised or forgotten.",
+            "Search the user's long-term memory in Bilinc: earlier conversations, notes, preferences and decisions. "
+            "Use short queries naming what you need (a person, project, place, date or number); to look up several "
+            "things at once, pass one query per item in `queries`. Each result has a key and the matching text "
+            "(long memories are cut to the part that matches).",
             {"query": {"type": "string", "description": "What to look for."},
-             "limit": {"type": "integer", "description": "Maximum results, 1-20 (default 8)."}},
-            ("query",)),
+             "queries": {"type": "array", "items": {"type": "string"},
+                         "description": f"Several separate searches, up to {_MAX_TOOL_QUERIES}; use instead of query."},
+             "limit": {"type": "integer", "description": "Maximum results per query, 1-20 (default 6)."}},
+            ()),
     _schema("bilinc_remember",
             "Store a new durable fact, decision or preference in Bilinc. Never overwrites: if the key already exists, "
             "use bilinc_revise instead.",
@@ -397,17 +464,17 @@ class BilincMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         if not self._client:
             return ""
-        return ("# Bilinc memory\nActive. Relevant memories are recalled before each turn. "
-                "Use bilinc_recall to search, bilinc_remember for new durable facts, bilinc_revise to change one "
-                "and bilinc_forget to remove one. Store only what will matter in later sessions, and never secrets.")
+        return ("# Bilinc memory\nActive. " + _RECALL_GUIDANCE +
+                " Use bilinc_remember for new durable facts, bilinc_revise to change one and bilinc_forget to "
+                "remove one. Store only what will matter in later sessions, and never secrets.")
 
     # -- recall -----------------------------------------------------------------
 
     def _recall_block(self, query: str, timeout: float, attempts: int) -> tuple[str, int]:
-        payload = self._client.recall(query, limit=self._options["recall_limit"], profile="fast", timeout=timeout,
-                                      attempts=attempts)
+        payload = self._client.recall(query, limit=self._options["recall_limit"], profile=_PREFETCH_PROFILE,
+                                      timeout=timeout, attempts=attempts)
         items = _result_items(payload)
-        return _format_prefetch(items), len(items)
+        return _format_prefetch(items, query), len(items)
 
     def _auto_recall_ready(self, query: str) -> bool:
         return bool(self._client and self._options["auto_recall"] and not self._blocked
@@ -572,10 +639,31 @@ class BilincMemoryProvider(MemoryProvider):
         return value
 
     def _tool_recall(self, args: dict[str, Any]) -> dict[str, Any]:
-        query = self._required(args, "query")
-        limit = _as_int(args.get("limit"), 8, 1, 20)
-        items = _result_items(self._client.recall(query, limit=limit))
-        return {"count": len(items), "results": [_tool_result(item) for item in items]}
+        raw = args.get("queries")
+        queries = [str(q).strip() for q in (raw if isinstance(raw, list) else []) if str(q or "").strip()]
+        single = str(args.get("query") or "").strip()
+        if single and single not in queries:
+            queries.insert(0, single)
+        if not queries:
+            raise ValueError("query is required")
+        queries = queries[:_MAX_TOOL_QUERIES]
+        limit = _as_int(args.get("limit"), 6, 1, 20)
+        if len(queries) == 1:
+            items = _result_items(self._client.recall(queries[0], limit=limit))
+            return {"count": len(items), "results": [_tool_result(item, queries[0]) for item in items]}
+        with ThreadPoolExecutor(max_workers=len(queries), thread_name_prefix="bilinc-recall") as pool:
+            payloads = list(pool.map(lambda q: self._client.recall(q, limit=limit), queries))
+        seen: set[Any] = set()
+        groups = []
+        for query, payload in zip(queries, payloads):
+            results = []
+            for item in _result_items(payload):
+                if item.get("key") in seen:
+                    continue
+                seen.add(item.get("key"))
+                results.append(_tool_result(item, query))
+            groups.append({"query": query, "results": results})
+        return {"count": sum(len(g["results"]) for g in groups), "searches": groups}
 
     def _tool_remember(self, args: dict[str, Any]) -> dict[str, Any]:
         content = _clip(self._required(args, "content"))

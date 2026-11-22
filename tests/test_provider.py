@@ -62,7 +62,7 @@ def test_recall_tool_returns_compact_results(make_provider, transport):
         {"key": "pref:editor", "value": "vim", "score": 0.9, "memory_type": "semantic", "internal": "drop me"}]})
     result = json.loads(provider.handle_tool_call("bilinc_recall", {"query": "which editor", "limit": 99}))
     assert result["count"] == 1
-    assert result["results"][0] == {"key": "pref:editor", "value": "vim", "score": 0.9, "memory_type": "semantic"}
+    assert result["results"][0] == {"key": "pref:editor", "value": "vim", "memory_type": "semantic"}
     assert transport.calls[-1]["body"]["limit"] == 20
 
 
@@ -86,7 +86,7 @@ def test_prefetch_formats_and_reports_recall_status(make_provider, transport):
     block = provider.prefetch("what database does project x use?")
     assert "project:x" in block and "postgres" in block
     assert provider.recall_status().count == 1
-    assert transport.calls[-1]["body"]["profile"] == "fast"
+    assert transport.calls[-1]["body"]["profile"] == "balanced"
 
 
 def test_prefetch_fails_soft_and_skips_trivial_prompts(make_provider, transport):
@@ -185,7 +185,7 @@ def test_outage_costs_one_short_attempt_then_backs_off(make_provider, transport)
     transport.respond("/api/cloud/memory/recall", 503, {"error": "cloud_runtime_unavailable", "retryable": True})
     assert provider.prefetch("what is the deploy plan?") == ""
     assert len(transport.calls) == 1
-    assert transport.calls[0]["timeout"] <= 2.0
+    assert transport.calls[0]["timeout"] <= 6.0  # under Hermes' 8 s provider budget
     assert provider.prefetch("and the rollback plan?") == ""
     provider.queue_prefetch("and the rollback plan?")
     assert len(transport.calls) == 1
@@ -215,3 +215,52 @@ def test_register_hands_out_a_fresh_instance():
     plugin.register(Ctx())
     plugin.register(Ctx())
     assert len(registered) == 2 and registered[0] is not registered[1]
+
+
+def test_recall_tool_accepts_several_queries_and_dedupes(make_provider, transport):
+    provider = make_provider()
+    both = {"results": [{"key": "person:anna", "value": "Anna Rao works at Fieldline"},
+                        {"key": "pref:editor", "value": "vim"}]}
+    transport.respond("/api/cloud/memory/recall", 200, both)
+    transport.respond("/api/cloud/memory/recall", 200, both)  # queries run in parallel; same answer for each
+    result = json.loads(provider.handle_tool_call("bilinc_recall", {"queries": ["Anna Rao employer", "editor"]}))
+    assert [g["query"] for g in result["searches"]] == ["Anna Rao employer", "editor"]
+    assert [r["key"] for r in result["searches"][0]["results"]] == ["person:anna", "pref:editor"]
+    assert result["searches"][1]["results"] == []  # same keys are not repeated
+    assert result["count"] == 2
+    assert len(transport.calls) == 2
+
+
+def test_recall_tool_requires_a_query(make_provider, transport):
+    provider = make_provider()
+    assert "query is required" in provider.handle_tool_call("bilinc_recall", {"queries": []})
+    assert transport.calls == []
+
+
+def test_long_values_are_cut_around_the_matching_part(make_provider, transport):
+    provider = make_provider()
+    filler = "unrelated planning chatter. " * 200
+    turn = {"user": filler + "The Lisbon offsite budget is 14,200 EUR. " + filler, "assistant": "Noted."}
+    transport.respond("/api/cloud/memory/recall", 200, {"results": [{"key": "hermes_session::s1::abc", "value": turn}]})
+    result = json.loads(provider.handle_tool_call("bilinc_recall", {"query": "Lisbon offsite budget"}))
+    item = result["results"][0]
+    assert item["truncated"] is True and len(item["value"]) <= 1502
+    assert "14,200 EUR" in item["value"]
+    transport.respond("/api/cloud/memory/recall", 200, {"results": [{"key": "hermes_session::s1::abc", "value": turn}]})
+    block = provider.prefetch("what is the Lisbon offsite budget?")
+    assert "14,200 EUR" in block
+    assert len(block) < 1000
+
+
+def test_captured_turns_read_as_dialogue(make_provider, transport):
+    provider = make_provider()
+    transport.respond("/api/cloud/memory/recall", 200, {"results": [
+        {"key": "hermes_session::s1::abc", "value": {"user": "I moved to Porto", "assistant": "Got it."}}]})
+    result = json.loads(provider.handle_tool_call("bilinc_recall", {"query": "where do I live"}))
+    assert result["results"][0]["value"] == "User: I moved to Porto\nAssistant: Got it."
+
+
+def test_system_prompt_does_not_promise_recall_that_may_not_happen(make_provider):
+    block = make_provider().system_prompt_block()
+    assert "recalled before each turn" not in block
+    assert "bilinc_recall before acting" in block

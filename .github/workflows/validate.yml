@@ -18,12 +18,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: NousResearch/hermes-agent
+          # Tested against the latest Hermes release, which is what users install.
+          ref: v0.23.3
           path: hermes-agent
       - uses: astral-sh/setup-uv@v6
       - name: Install Hermes
         run: |
           uv venv --python 3.14 .venv
-          VIRTUAL_ENV=.venv uv pip install -e ./hermes-agent pytest
+          # Hermes resolves some pins with [tool.uv] override-dependencies (e.g. pillow over browser-harness);
+          # `uv pip install` does not read them from a dependency, so pass them explicitly.
+          python3 -c "import tomllib; print('\n'.join(tomllib.load(open('hermes-agent/pyproject.toml', 'rb')).get('tool', {}).get('uv', {}).get('override-dependencies', [])))" > overrides.txt
+          VIRTUAL_ENV=.venv uv pip install --override overrides.txt -e ./hermes-agent pytest
       - name: Unit tests
         run: HERMES_AGENT_PATH=$GITHUB_WORKSPACE/hermes-agent .venv/bin/python -m pytest -q plugin/tests
       - name: hermes plugins validate
