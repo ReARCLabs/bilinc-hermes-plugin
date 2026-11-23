@@ -264,3 +264,11 @@ def test_system_prompt_does_not_promise_recall_that_may_not_happen(make_provider
     block = make_provider().system_prompt_block()
     assert "recalled before each turn" not in block
     assert "bilinc_recall before acting" in block
+
+
+
+def test_clip_keeps_marker_inside_limit():
+    out = plugin._clip("x" * 5000, 4096)
+    assert len(out) == 4096 and out.endswith("…[truncated]")
+    assert plugin._clip("short", 4096) == "short"
+    assert len(plugin._clip("y" * 600, 512)) == 512

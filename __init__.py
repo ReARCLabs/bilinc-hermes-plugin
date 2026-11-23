@@ -33,7 +33,7 @@ from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.1"
 _DEFAULT_BASE_URL = "https://bilinc.space"
 _KEY_URL = "https://bilinc.space/signup?utm_source=hermes&utm_medium=plugin"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -83,9 +83,19 @@ def _redact(text: Any) -> str:
     return _SECRETISH.sub("[REDACTED]", "" if text is None else str(text))
 
 
+_TRUNCATED = "…[truncated]"
+
+
 def _clip(text: Any, limit: int = _MAX_VALUE_CHARS) -> str:
+    """Redact and cut *text* so the result, marker included, is at most *limit* characters.
+
+    Bilinc Cloud rejects longer fields (e.g. a recall query over 4096 characters gets 400
+    invalid_request), so the marker must fit inside the limit, not be appended after it.
+    """
     value = _redact(text)
-    return value if len(value) <= limit else value[:limit] + "…[truncated]"
+    if len(value) <= limit:
+        return value
+    return value[:max(limit - len(_TRUNCATED), 0)] + _TRUNCATED
 
 
 def _digest(*parts: Any, length: int = 16) -> str:
