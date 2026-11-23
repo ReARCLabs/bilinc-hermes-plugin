@@ -272,3 +272,4 @@ def test_clip_keeps_marker_inside_limit():
     assert len(out) == 4096 and out.endswith("…[truncated]")
     assert plugin._clip("short", 4096) == "short"
     assert len(plugin._clip("y" * 600, 512)) == 512
+    assert plugin._clip("z" * 50, 5) == "zzzzz"

@@ -95,7 +95,9 @@ def _clip(text: Any, limit: int = _MAX_VALUE_CHARS) -> str:
     value = _redact(text)
     if len(value) <= limit:
         return value
-    return value[:max(limit - len(_TRUNCATED), 0)] + _TRUNCATED
+    if limit < len(_TRUNCATED):
+        return value[:limit]
+    return value[:limit - len(_TRUNCATED)] + _TRUNCATED
 
 
 def _digest(*parts: Any, length: int = 16) -> str:
